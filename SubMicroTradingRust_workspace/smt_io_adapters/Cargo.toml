@@ -1,0 +1,16 @@
+[package]
+name = "smt_io_adapters"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1"
+thiserror = "1.0"
+
+# Dependency on smt_core (if needed, though for I/O adapters it might be minimal or through traits)
+# smt_core = { path = "../smt_core" }

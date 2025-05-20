@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FixMessageBody"],"struct":["FixExecutionReport","FixHeader","FixHeartbeat","FixLogon","FixLogout","FixMessage","FixNewOrderSingle","FixResendRequest","FixSequenceReset","FixTestRequest","FixTrailer"]};

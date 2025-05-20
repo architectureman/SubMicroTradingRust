@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "smt_core",
+    "smt_io_adapters", "smt_oms_simulation",
+]
+resolver = "2"
+

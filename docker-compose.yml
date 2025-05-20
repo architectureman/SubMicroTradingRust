@@ -1,0 +1,17 @@
+services:
+  submicrotrading_rust:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: submicrotrading_rust_app
+    # image: your_image_name:latest # Uncomment and set if you want to push to a registry
+    ports:
+      - "8080:8080" # Example: if simulator listens on port 8080 (adjust as needed)
+    environment:
+      - RUST_LOG=info # Configure log level for the application
+      # - DATABASE_URL=mysql://user:password@host:port/database # Example for DB connection
+    # volumes:
+      # - ./logs:/usr/local/bin/logs # Example: map volume for application logs
+      # - ./config:/usr/local/bin/config # Example: map volume for configuration files
+    restart: unless-stopped
+

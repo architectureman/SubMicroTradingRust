@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SOH"],"enum":["CodecError"],"fn":["append_tag_char","append_tag_decimal","append_tag_u32","append_tag_value","calculate_checksum","decode_fix_message","encode_fix_message","get_field_char","get_field_decimal","get_field_str","get_field_u32"],"trait":["FixEncoder","FixMessageBodyDecoder"]};

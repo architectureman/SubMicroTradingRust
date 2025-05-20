@@ -1,0 +1,10 @@
+[package]
+name = "smt_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1"
+rust_decimal = { version = "1.33", features = ["macros"] }
+rust_decimal_macros = "1.33"
+thiserror = "1.0"
