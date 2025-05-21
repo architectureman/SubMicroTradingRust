@@ -6,7 +6,7 @@ services:
     container_name: submicrotrading_rust_app
     # image: your_image_name:latest # Uncomment and set if you want to push to a registry
     ports:
-      - "8080:8080" # Example: if simulator listens on port 8080 (adjust as needed)
+      - "3000:3000" # Example: if simulator listens on port 3000 (adjust as needed)
     environment:
       - RUST_LOG=info # Configure log level for the application
       # - DATABASE_URL=mysql://user:password@host:port/database # Example for DB connection

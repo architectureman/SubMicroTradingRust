@@ -1,14 +1,18 @@
 use clap::Parser;
 use smt_core::common_types::{OrderType, Side, Symbol, TimeInForce};
-use smt_core::protocol_defs::fix_messages::{FixMessageBody, FixNewOrderSingle, FixLogon, FixExecutionReport, ExecType, OrderStatus};
+use smt_core::protocol_defs::fix_messages::{FixMessageBody, FixNewOrderSingle, FixLogon, FixExecutionReport};
+use smt_core::common_types::OrderStatus;
 use smt_core::codec_engine::fix_codec::{encode_fix_message, decode_fix_message};
 use smt_io_adapters::network_tcp::{TcpConnectionManager, read_message, write_message, NetworkError};
 use smt_io_adapters::file_logger;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+// Remove these unused imports
+// Xóa các dòng sau
+// use tokio::io::{AsyncReadExt, AsyncWriteExt};
+// use tracing::{debug};
 use bytes::BytesMut;
 use rust_decimal_macros::dec;
-use tracing::{info, error, warn, debug};
+use tracing::{info, error, warn};
 use std::error::Error;
 
 #[derive(Parser, Debug)]
@@ -22,12 +26,12 @@ struct Args {
 enum Commands {
     /// Runs the OMS simulator in server mode
     Server {
-        #[clap(short, long, default_value = "127.0.0.1:8080")]
+        #[clap(short, long, default_value = "0.0.0.0:3000")]
         listen_addr: String,
     },
     /// Runs the OMS simulator in client mode to send a test order
     Client {
-        #[clap(short, long, default_value = "127.0.0.1:8080")]
+        #[clap(short, long, default_value = "0.0.0.0:3000")]
         server_addr: String,
         #[clap(long, default_value = "TESTCLIENT")]
         sender_comp_id: String,
@@ -60,8 +64,12 @@ async fn run_server(listen_addr: String) -> Result<(), Box<dyn Error + Send + Sy
 
 async fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buffer = BytesMut::with_capacity(4096);
-    let mut msg_seq_num_counter = 1; // Simple counter for outgoing messages
-
+    let mut msg_seq_num_counter = 1;
+    
+    // Thêm các biến này
+    let sender_comp_id = "TESTSERVER".to_string();
+    let target_comp_id = "TESTCLIENT".to_string();
+    
     loop {
         match read_message(&mut stream, &mut buffer).await {
             Ok(Some(received_data)) => {
@@ -75,10 +83,11 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn Error + 
                             FixMessageBody::NewOrderSingle(nos) => {
                                 info!("Received NewOrderSingle: {:?}", nos);
                                 let exec_report = FixExecutionReport {
-                                    order_id: format!("EXEC_{}", nos.cl_ord_id),
+                                    // Thay thế format!() bằng một giá trị u64
+                                    order_id: chrono::Utc::now().timestamp_millis() as u64, // Sử dụng timestamp làm ID
                                     cl_ord_id: Some(nos.cl_ord_id.clone()),
                                     exec_id: format!("EID_{}", chrono::Utc::now().timestamp_millis()),
-                                    exec_type: ExecType::New,
+                                    // Sửa lỗi: Xóa trường exec_type không tồn tại
                                     ord_status: OrderStatus::New,
                                     symbol: nos.symbol.clone(),
                                     side: nos.side,
@@ -87,15 +96,16 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn Error + 
                                     avg_px: dec!(0),
                                     last_px: None,
                                     last_qty: None,
-                                    transact_time: Some(chrono::Utc::now().timestamp_millis()),
+                                    // Sửa lỗi: Không bọc trong Some()
+                                    transact_time: chrono::Utc::now().timestamp_millis().try_into().unwrap(),
                                     text: Some("Order Accepted".to_string()),
                                 };
                                 let response_bytes = encode_fix_message(
                                     &exec_report, 
-                                    &fix_message.header.target_comp_id, // Server becomes sender
-                                    &fix_message.header.sender_comp_id, // Client becomes target
+                                    &fix_message.header.target_comp_id,
+                                    &fix_message.header.sender_comp_id,
                                     msg_seq_num_counter,
-                                    chrono::Utc::now().timestamp_millis()
+                                    chrono::Utc::now().timestamp_millis().try_into().unwrap()
                                 )?;
                                 msg_seq_num_counter += 1;
                                 write_message(&mut stream, &response_bytes).await?;
@@ -114,7 +124,7 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), Box<dyn Error + 
                                     &fix_message.header.target_comp_id,
                                     &fix_message.header.sender_comp_id,
                                     msg_seq_num_counter,
-                                    chrono::Utc::now().timestamp_millis()
+                                    chrono::Utc::now().timestamp_millis().try_into().unwrap()
                                 )?;
                                 msg_seq_num_counter += 1;
                                 write_message(&mut stream, &response_bytes).await?;
@@ -162,7 +172,7 @@ async fn run_client(server_addr: String, sender_comp_id: String, target_comp_id:
         heart_bt_int: 30,
         reset_seq_num_flag: Some(true),
     };
-    let logon_bytes = encode_fix_message(&logon_msg, &sender_comp_id, &target_comp_id, 1, chrono::Utc::now().timestamp_millis())?;
+    let logon_bytes = encode_fix_message(&logon_msg, &sender_comp_id, &target_comp_id, 1, chrono::Utc::now().timestamp_millis().try_into().unwrap())?;
     write_message(&mut stream, &logon_bytes).await?;
     info!("Sent Logon message");
 
@@ -191,13 +201,13 @@ async fn run_client(server_addr: String, sender_comp_id: String, target_comp_id:
         cl_ord_id: format!("TestOrd_{}", chrono::Utc::now().timestamp_micros()),
         symbol: Symbol::new("BTC/USD"),
         side: Side::Buy,
-        transact_time: chrono::Utc::now().timestamp_millis(),
+        transact_time: chrono::Utc::now().timestamp_millis().try_into().unwrap(),
         order_qty: dec!(1.5),
         ord_type: OrderType::Limit,
         price: Some(dec!(50000.0)),
         tif: Some(TimeInForce::GTC),
     };
-    let order_bytes = encode_fix_message(&new_order, &sender_comp_id, &target_comp_id, 2, chrono::Utc::now().timestamp_millis())?;
+    let order_bytes = encode_fix_message(&new_order, &sender_comp_id, &target_comp_id, 2, chrono::Utc::now().timestamp_millis().try_into().unwrap())?;
     write_message(&mut stream, &order_bytes).await?;
     info!("Sent NewOrderSingle: {:?}", new_order);
 
@@ -252,4 +262,5 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     Ok(())
 }
+// Xóa hoàn toàn 3 dòng khai báo biến toàn cục ở đây
 

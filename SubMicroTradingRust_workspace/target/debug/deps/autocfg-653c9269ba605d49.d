@@ -1,0 +1,10 @@
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/libautocfg-653c9269ba605d49.rmeta: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/error.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/rustc.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/version.rs
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/libautocfg-653c9269ba605d49.rlib: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/error.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/rustc.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/version.rs
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/autocfg-653c9269ba605d49.d: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/error.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/rustc.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/version.rs
+
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/lib.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/error.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/rustc.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.4.0/src/version.rs:

@@ -3,8 +3,6 @@ name = "smt_oms_simulation"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 smt_core = { path = "../smt_core" }
 smt_io_adapters = { path = "../smt_io_adapters" }
@@ -14,3 +12,4 @@ rust_decimal = "1"
 rust_decimal_macros = "1"
 clap = { version = "4", features = ["derive"] }
 bytes = "1"
+chrono = "0.4"

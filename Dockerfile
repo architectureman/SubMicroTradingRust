@@ -1,6 +1,6 @@
 # Giai đoạn 1: Builder
 # Sử dụng một image Rust chính thức với phiên bản ổn định gần đây
-FROM rust:1.70-slim AS builder
+FROM rust:1.87.0-slim-bullseye AS builder
 
 WORKDIR /usr/src/app
 
@@ -40,5 +40,5 @@ COPY --from=builder /usr/src/app/SubMicroTradingRust_workspace/target/release/sm
 
 # Thiết lập entrypoint cho container
 # Mặc định chạy server mode, có thể override bằng docker run command
-CMD ["./oms_simulator", "server"]
+CMD ["./oms_simulator", "server", "--listen-addr", "0.0.0.0:3000"]
 

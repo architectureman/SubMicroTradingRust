@@ -395,3 +395,45 @@ mod tests {
     }
 }
 
+impl FixEncoder for FixExecutionReport {
+    fn msg_type(&self) -> &str { "8" }
+    fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError> {
+        append_tag_value(body_buf, 37, &self.order_id.to_string());
+        if let Some(ref cl_ord_id) = self.cl_ord_id {
+            append_tag_value(body_buf, 11, cl_ord_id);
+        }
+        append_tag_value(body_buf, 17, &self.exec_id);
+        let ord_status_char = match self.ord_status {
+            OrderStatus::New => '0',
+            OrderStatus::PartiallyFilled => '1',
+            OrderStatus::Filled => '2',
+            OrderStatus::Cancelled => '4',
+            OrderStatus::Rejected => '8',
+            OrderStatus::PendingCancel => '6',
+            OrderStatus::PendingReplace => '5',
+            OrderStatus::Expired => 'C',
+        };
+        append_tag_char(body_buf, 39, ord_status_char);
+        append_tag_value(body_buf, 55, self.symbol.as_str());
+        let side_char = match self.side {
+            Side::Buy => '1',
+            Side::Sell => '2',
+        };
+        append_tag_char(body_buf, 54, side_char);
+        append_tag_decimal(body_buf, 151, self.leaves_qty);
+        append_tag_decimal(body_buf, 14, self.cum_qty);
+        append_tag_decimal(body_buf, 6, self.avg_px);
+        if let Some(last_qty) = self.last_qty {
+            append_tag_decimal(body_buf, 32, last_qty);
+        }
+        if let Some(last_px) = self.last_px {
+            append_tag_decimal(body_buf, 31, last_px);
+        }
+        append_tag_u32(body_buf, 60, self.transact_time as u32);
+        if let Some(ref text) = self.text {
+            append_tag_value(body_buf, 58, text);
+        }
+        Ok(())
+    }
+}
+

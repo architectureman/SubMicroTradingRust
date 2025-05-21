@@ -1,0 +1,9 @@
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/libclap-e41d168f78811494.rmeta: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.md
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/libclap-e41d168f78811494.rlib: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.md
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/clap-e41d168f78811494.d: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.md
+
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/lib.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.5.38/src/../examples/demo.md:

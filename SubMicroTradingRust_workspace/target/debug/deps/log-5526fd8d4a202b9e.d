@@ -1,0 +1,10 @@
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/liblog-5526fd8d4a202b9e.rmeta: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/macros.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/serde.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/__private_api.rs
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/liblog-5526fd8d4a202b9e.rlib: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/macros.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/serde.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/__private_api.rs
+
+/Users/mike/Documents/Project/oms/DockerVersion/SubMicroTradingRust_Docker_OMS_Full_Deliverables/SubMicroTradingRust_Project_With_OMS_Sim/SubMicroTradingRust_workspace/target/debug/deps/log-5526fd8d4a202b9e.d: /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/lib.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/macros.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/serde.rs /Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/__private_api.rs
+
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/lib.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/macros.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/serde.rs:
+/Users/mike/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/log-0.4.27/src/__private_api.rs:
