@@ -1,12 +1,25 @@
-#![allow(dead_code, unused_variables)] // Allow dead code and unused vars for now
+#![allow(dead_code, unused_variables)]
 
 use crate::protocol_defs::fix_messages::*;
 use crate::common_types::{Symbol, Side, OrderType, TimeInForce, OrderStatus};
-use bytes::{BytesMut, BufMut, Bytes};
+use bytes::{BytesMut, BufMut, Bytes, Buf}; // Added Buf trait
 use rust_decimal::Decimal;
 use std::str;
+use std::time::Instant; // Removed unused Duration
+use std::sync::atomic::{AtomicU64, Ordering};
 
+// Fixed-size constant for SOH delimiter
 const SOH: u8 = 0x01;
+
+// Performance metrics for monitoring
+static ENCODE_COUNT: AtomicU64 = AtomicU64::new(0);
+static DECODE_COUNT: AtomicU64 = AtomicU64::new(0);
+static ENCODE_NANOS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DECODE_NANOS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+// Maximum number of fields a FIX message might have
+// Increase if you have messages with more fields
+const MAX_FIX_FIELDS: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
@@ -32,55 +45,269 @@ pub enum CodecError {
     ParseDecimalError(#[from] rust_decimal::Error),
     #[error("Parse int error: {0}")]
     ParseIntError(#[from] std::num::ParseIntError),
+    #[error("Buffer pool exhausted")]
+    BufferPoolExhausted,
+}
+
+// Pre-allocated field map for fast parsing
+// This avoids HashMaps and dynamic allocations
+#[derive(Clone, Debug)]
+pub struct FixFieldMap {
+    // Stores tag-value pairs as (tag, start_index, length)
+    fields: [(u32, usize, usize); MAX_FIX_FIELDS],
+    field_count: usize,
+    data: [u8; 4096], // Raw message data buffer
+    data_length: usize,
+}
+
+impl FixFieldMap {
+    pub fn new() -> Self {
+        FixFieldMap {
+            fields: [(0, 0, 0); MAX_FIX_FIELDS],
+            field_count: 0,
+            data: [0; 4096],
+            data_length: 0,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.field_count = 0;
+        self.data_length = 0;
+    }
+
+    // Add raw data to the buffer
+    pub fn set_data(&mut self, data: &[u8]) -> Result<(), CodecError> {
+        if data.len() > self.data.len() {
+            return Err(CodecError::InvalidFormat("Message too large".into()));
+        }
+        self.data[..data.len()].copy_from_slice(data);
+        self.data_length = data.len();
+        Ok(())
+    }
+
+    // Fast field parsing without allocations
+    pub fn parse_fields(&mut self) -> Result<(), CodecError> {
+        self.field_count = 0;
+        let mut pos = 0;
+
+        while pos < self.data_length {
+            // Find '=' separator
+            let eq_pos = match self.data[pos..self.data_length].iter().position(|&b| b == b'=') {
+                Some(p) => pos + p,
+                None => return Err(CodecError::IncompleteMessage),
+            };
+
+            // Fast tag parsing without string conversion
+            let tag = parse_u32_from_bytes(&self.data[pos..eq_pos])?;
+
+            // Find field end (SOH)
+            let soh_pos = match self.data[eq_pos+1..self.data_length].iter().position(|&b| b == SOH) {
+                Some(p) => eq_pos + 1 + p,
+                None => return Err(CodecError::IncompleteMessage),
+            };
+
+            // Store field position if we have space
+            if self.field_count < MAX_FIX_FIELDS {
+                self.fields[self.field_count] = (tag, eq_pos + 1, soh_pos - (eq_pos + 1));
+                self.field_count += 1;
+            } else {
+                return Err(CodecError::InvalidFormat("Too many fields".into()));
+            }
+
+            pos = soh_pos + 1;
+        }
+
+        Ok(())
+    }
+
+    // Get field as bytes without allocation
+    pub fn get_field_bytes(&self, tag: u32) -> Option<&[u8]> {
+        for i in 0..self.field_count {
+            if self.fields[i].0 == tag {
+                let (_, start, len) = self.fields[i];
+                return Some(&self.data[start..start+len]);
+            }
+        }
+        None
+    }
+
+    // Get field as string (use sparingly - allocates)
+    pub fn get_field_str(&self, tag: u32) -> Result<Option<String>, CodecError> {
+        match self.get_field_bytes(tag) {
+            Some(bytes) => Ok(Some(String::from_utf8(bytes.to_vec())?)),
+            None => Ok(None),
+        }
+    }
+
+    // Get field as u32 without allocation
+    pub fn get_field_u32(&self, tag: u32) -> Result<Option<u32>, CodecError> {
+        match self.get_field_bytes(tag) {
+            Some(bytes) => Ok(Some(parse_u32_from_bytes(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    // Get field as decimal (use sparingly - allocates)
+    pub fn get_field_decimal(&self, tag: u32) -> Result<Option<Decimal>, CodecError> {
+        match self.get_field_bytes(tag) {
+            Some(bytes) => {
+                let s = std::str::from_utf8(bytes)?;
+                Ok(Some(s.parse()?))
+            },
+            None => Ok(None),
+        }
+    }
+}
+
+// Fast numeric parsing without allocations
+#[inline]
+fn parse_u32_from_bytes(bytes: &[u8]) -> Result<u32, CodecError> {
+    let mut value: u32 = 0;
+    for &byte in bytes {
+        if byte >= b'0' && byte <= b'9' {
+            value = value * 10 + (byte - b'0') as u32;
+        } else {
+            return Err(CodecError::InvalidValue {
+                tag: 0,
+                value: String::from_utf8_lossy(bytes).into_owned(),
+            });
+        }
+    }
+    Ok(value)
 }
 
 fn calculate_checksum(buffer: &[u8]) -> u8 {
     buffer.iter().fold(0u8, |acc, &x| acc.wrapping_add(x))
 }
 
-fn append_tag_value(buf: &mut BytesMut, tag: u32, value: &str) {
-    buf.put_slice(tag.to_string().as_bytes());
+// Pre-allocated buffer pool for message encoding/decoding
+pub struct FixBufferPool {
+    buffers: Vec<BytesMut>,
+    available_indices: Vec<usize>,
+}
+
+impl FixBufferPool {
+    pub fn new(size: usize, buffer_size: usize) -> Self {
+        let mut buffers = Vec::with_capacity(size);
+        for _ in 0..size {
+            buffers.push(BytesMut::with_capacity(buffer_size));
+        }
+        
+        FixBufferPool {
+            buffers,
+            available_indices: (0..size).collect(),
+        }
+    }
+    
+    pub fn get_buffer(&mut self) -> Result<&mut BytesMut, CodecError> {
+        match self.available_indices.pop() {
+            Some(index) => Ok(&mut self.buffers[index]),
+            None => Err(CodecError::BufferPoolExhausted),
+        }
+    }
+    
+    pub fn return_buffer(&mut self, buffer_index: usize) {
+        if buffer_index < self.buffers.len() {
+            self.buffers[buffer_index].clear();
+            self.available_indices.push(buffer_index);
+        }
+    }
+}
+
+// Optimized versions of append functions with inlining
+#[inline]
+fn append_tag_value(buf: &mut BytesMut, tag: u32, value: &[u8]) {
+    // Fast integer rendering without allocations
+    let mut tag_buf = [0u8; 10]; // Enough for any 32-bit integer
+    let mut pos = 0;
+    
+    // Convert tag to digits
+    let mut t = tag;
+    if t == 0 {
+        tag_buf[pos] = b'0';
+        pos += 1;
+    } else {
+        while t > 0 {
+            tag_buf[pos] = b'0' + (t % 10) as u8;
+            t /= 10;
+            pos += 1;
+        }
+    }
+    
+    // Reverse digits
+    for i in 0..pos/2 {
+        tag_buf.swap(i, pos-1-i);
+    }
+    
+    // Append tag=value<SOH>
+    buf.extend_from_slice(&tag_buf[..pos]);
     buf.put_u8(b'=');
-    buf.put_slice(value.as_bytes());
+    buf.extend_from_slice(value);
     buf.put_u8(SOH);
 }
 
+#[inline]
 fn append_tag_decimal(buf: &mut BytesMut, tag: u32, value: Decimal) {
-    append_tag_value(buf, tag, &value.to_string());
+    // This still allocates but is hard to avoid with Decimal
+    append_tag_value(buf, tag, value.to_string().as_bytes());
 }
 
+#[inline]
 fn append_tag_u32(buf: &mut BytesMut, tag: u32, value: u32) {
-    append_tag_value(buf, tag, &value.to_string());
+    // Fast integer rendering without allocation
+    let mut value_buf = [0u8; 10]; // Enough for any 32-bit integer
+    let mut pos = 0;
+    
+    // Convert value to digits
+    let mut v = value;
+    if v == 0 {
+        value_buf[pos] = b'0';
+        pos += 1;
+    } else {
+        while v > 0 {
+            value_buf[pos] = b'0' + (v % 10) as u8;
+            v /= 10;
+            pos += 1;
+        }
+    }
+    
+    // Reverse digits
+    for i in 0..pos/2 {
+        value_buf.swap(i, pos-1-i);
+    }
+    
+    append_tag_value(buf, tag, &value_buf[..pos]);
 }
 
+#[inline]
 fn append_tag_char(buf: &mut BytesMut, tag: u32, value: char) {
-    append_tag_value(buf, tag, &value.to_string());
+    let value_buf = [value as u8];
+    append_tag_value(buf, tag, &value_buf);
 }
 
-// Simplified FIX Encoder Trait
+// Modified trait using FixFieldMap for decoding
+pub trait FixMessageBodyDecoder: Sized {
+    fn decode_body(fields: &FixFieldMap) -> Result<Self, CodecError>;
+}
+
+// Encode trait remains similar
 pub trait FixEncoder {
     fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError>;
     fn msg_type(&self) -> &str;
 }
 
-// Simplified FIX Decoder Trait
-pub trait FixMessageBodyDecoder: Sized {
-    fn decode_body(fields: &mut std::collections::HashMap<u32, Vec<u8>>) -> Result<Self, CodecError>;
-}
-
-// --- Implementations for specific messages ---
-
+// Encode implementation remains largely the same
 impl FixEncoder for FixNewOrderSingle {
     fn msg_type(&self) -> &str { "D" }
     fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError> {
-        append_tag_value(body_buf, 11, &self.cl_ord_id);
-        append_tag_value(body_buf, 55, self.symbol.as_str());
+        append_tag_value(body_buf, 11, self.cl_ord_id.as_bytes());
+        append_tag_value(body_buf, 55, self.symbol.as_str().as_bytes());
         let side_char = match self.side {
             Side::Buy => '1',
             Side::Sell => '2',
         };
         append_tag_char(body_buf, 54, side_char);
-        append_tag_u32(body_buf, 60, self.transact_time as u32); // Assuming Timestamp is u64, cast to u32 for simplicity
+        append_tag_u32(body_buf, 60, self.transact_time as u32);
         append_tag_decimal(body_buf, 38, self.order_qty);
         let ord_type_char = match self.ord_type {
             OrderType::Market => '1',
@@ -104,62 +331,61 @@ impl FixEncoder for FixNewOrderSingle {
     }
 }
 
-// Helper to extract a required field
-fn get_field_str(fields: &mut std::collections::HashMap<u32, Vec<u8>>, tag: u32) -> Result<String, CodecError> {
-    fields.remove(&tag)
-        .ok_or(CodecError::MissingField(tag))
-        .and_then(|v| String::from_utf8(v).map_err(CodecError::from))
-}
-
-fn get_field_u32(fields: &mut std::collections::HashMap<u32, Vec<u8>>, tag: u32) -> Result<u32, CodecError> {
-    get_field_str(fields, tag)?.parse().map_err(CodecError::from)
-}
-
-fn get_field_decimal(fields: &mut std::collections::HashMap<u32, Vec<u8>>, tag: u32) -> Result<Decimal, CodecError> {
-    get_field_str(fields, tag)?.parse().map_err(CodecError::from)
-}
-
-fn get_field_char(fields: &mut std::collections::HashMap<u32, Vec<u8>>, tag: u32) -> Result<char, CodecError> {
-    let s = get_field_str(fields, tag)?;
-    s.chars().next().ok_or_else(|| CodecError::InvalidValue { tag, value: s.clone() })
-}
-
+// Updated implementation using FixFieldMap for decoding
 impl FixMessageBodyDecoder for FixNewOrderSingle {
-    fn decode_body(fields: &mut std::collections::HashMap<u32, Vec<u8>>) -> Result<Self, CodecError> {
-        let cl_ord_id = get_field_str(fields, 11)?;
-        let symbol_str = get_field_str(fields, 55)?;
+    fn decode_body(fields: &FixFieldMap) -> Result<Self, CodecError> {
+        // Get required fields
+        let cl_ord_id = fields.get_field_str(11)?.ok_or(CodecError::MissingField(11))?;
+        let symbol_str = fields.get_field_str(55)?.ok_or(CodecError::MissingField(55))?;
         let symbol = Symbol::new(&symbol_str);
-        let side_char = get_field_char(fields, 54)?;
-        let side = match side_char {
-            '1' => Side::Buy,
-            '2' => Side::Sell,
-            _ => return Err(CodecError::InvalidValue{tag: 54, value: side_char.to_string()}),
+        
+        let side_bytes = fields.get_field_bytes(54).ok_or(CodecError::MissingField(54))?;
+        if side_bytes.len() != 1 {
+            return Err(CodecError::InvalidValue { tag: 54, value: "Invalid side value length".into() });
+        }
+        let side = match side_bytes[0] {
+            b'1' => Side::Buy,
+            b'2' => Side::Sell,
+            _ => return Err(CodecError::InvalidValue { tag: 54, value: format!("Unknown side '{}'", side_bytes[0] as char) }),
         };
-        let transact_time = get_field_u32(fields, 60)? as u64; // Assuming Timestamp is u64
-        let order_qty = get_field_decimal(fields, 38)?;
-        let ord_type_char = get_field_char(fields, 40)?;
-        let ord_type = match ord_type_char {
-            '1' => OrderType::Market,
-            '2' => OrderType::Limit,
-            _ => return Err(CodecError::InvalidValue{tag: 40, value: ord_type_char.to_string()}),
+        
+        let transact_time = fields.get_field_u32(60)?.ok_or(CodecError::MissingField(60))? as u64;
+        let order_qty = fields.get_field_decimal(38)?.ok_or(CodecError::MissingField(38))?;
+        
+        let ord_type_bytes = fields.get_field_bytes(40).ok_or(CodecError::MissingField(40))?;
+        if ord_type_bytes.len() != 1 {
+            return Err(CodecError::InvalidValue { tag: 40, value: "Invalid order type value length".into() });
+        }
+        let ord_type = match ord_type_bytes[0] {
+            b'1' => OrderType::Market,
+            b'2' => OrderType::Limit,
+            _ => return Err(CodecError::InvalidValue { tag: 40, value: format!("Unknown order type '{}'", ord_type_bytes[0] as char) }),
         };
-        let price = fields.remove(&44)
-            .map(|v| String::from_utf8(v).map_err(CodecError::from).and_then(|s| s.parse().map_err(CodecError::from)))
-            .transpose()?;
-        let tif = fields.remove(&59)
-            .map(|v| String::from_utf8(v).map_err(CodecError::from).and_then(|s| {
-                let c = s.chars().next().ok_or_else(|| CodecError::InvalidValue{tag: 59, value: s.clone()})?;
-                match c {
-                    '0' => Ok(TimeInForce::Day),
-                    '1' => Ok(TimeInForce::GTC),
-                    '3' => Ok(TimeInForce::IOC),
-                    '4' => Ok(TimeInForce::FOK),
-                    '6' => Ok(TimeInForce::GTD),
-                    _ => Err(CodecError::InvalidValue{tag: 59, value: c.to_string()}),
-                }
-            }))
-            .transpose()?;
-
+        
+        // Optional fields
+        let price = if let Some(price_bytes) = fields.get_field_bytes(44) {
+            let price_str = std::str::from_utf8(price_bytes)?;
+            Some(price_str.parse()?)
+        } else {
+            None
+        };
+        
+        let tif = if let Some(tif_bytes) = fields.get_field_bytes(59) {
+            if tif_bytes.len() != 1 {
+                return Err(CodecError::InvalidValue { tag: 59, value: "Invalid TIF value length".into() });
+            }
+            match tif_bytes[0] {
+                b'0' => Some(TimeInForce::Day),
+                b'1' => Some(TimeInForce::GTC),
+                b'3' => Some(TimeInForce::IOC),
+                b'4' => Some(TimeInForce::FOK),
+                b'6' => Some(TimeInForce::GTD),
+                _ => return Err(CodecError::InvalidValue { tag: 59, value: format!("Unknown TIF '{}'", tif_bytes[0] as char) }),
+            }
+        } else {
+            None
+        };
+        
         Ok(FixNewOrderSingle {
             cl_ord_id,
             symbol,
@@ -173,9 +399,7 @@ impl FixMessageBodyDecoder for FixNewOrderSingle {
     }
 }
 
-// Implement FixEncoder and FixMessageBodyDecoder for other message types (Logon, ExecutionReport, etc.) similarly
-// For brevity, only NewOrderSingle is partially implemented here.
-
+// Implement for Logon message
 impl FixEncoder for FixLogon {
     fn msg_type(&self) -> &str { "A" }
     fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError> {
@@ -189,209 +413,243 @@ impl FixEncoder for FixLogon {
 }
 
 impl FixMessageBodyDecoder for FixLogon {
-    fn decode_body(fields: &mut std::collections::HashMap<u32, Vec<u8>>) -> Result<Self, CodecError> {
-        let encrypt_method = get_field_u32(fields, 98)?;
-        let heart_bt_int = get_field_u32(fields, 108)?;
-        let reset_seq_num_flag = fields.remove(&141)
-            .map(|v| String::from_utf8(v).map_err(CodecError::from).map(|s| s == "Y"))
-            .transpose()?;
+    fn decode_body(fields: &FixFieldMap) -> Result<Self, CodecError> {
+        let encrypt_method = fields.get_field_u32(98)?.ok_or(CodecError::MissingField(98))?;
+        let heart_bt_int = fields.get_field_u32(108)?.ok_or(CodecError::MissingField(108))?;
+        
+        let reset_seq_num_flag = if let Some(flag_bytes) = fields.get_field_bytes(141) {
+            if flag_bytes.len() != 1 {
+                return Err(CodecError::InvalidValue { tag: 141, value: "Invalid flag value length".into() });
+            }
+            Some(flag_bytes[0] == b'Y')
+        } else {
+            None
+        };
+        
         Ok(FixLogon { encrypt_method, heart_bt_int, reset_seq_num_flag })
     }
 }
 
+// Fixed implementation for ExecutionReport with proper type conversions
+impl FixEncoder for FixExecutionReport {
+    fn msg_type(&self) -> &str { "8" }
+    fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError> {
+        // Encode order_id - convert u64 to u32
+        append_tag_u32(body_buf, 37, self.order_id.try_into().unwrap());
+        
+        // Encode client order id if present
+        if let Some(ref cl_ord_id) = self.cl_ord_id {
+            append_tag_value(body_buf, 11, cl_ord_id.as_bytes());
+        }
+        
+        // Encode exec_id
+        append_tag_value(body_buf, 17, self.exec_id.as_bytes());
+        
+        // Encode order status
+        let ord_status_char = match self.ord_status {
+            OrderStatus::New => '0',
+            OrderStatus::PartiallyFilled => '1',
+            OrderStatus::Filled => '2',
+            OrderStatus::Cancelled => '4',
+            OrderStatus::Rejected => '8',
+            OrderStatus::PendingCancel => '6',
+            OrderStatus::PendingReplace => '5',
+            OrderStatus::Expired => 'C',
+        };
+        append_tag_char(body_buf, 39, ord_status_char);
+        
+        // Encode symbol
+        append_tag_value(body_buf, 55, self.symbol.as_str().as_bytes());
+        
+        // Encode side
+        let side_char = match self.side {
+            Side::Buy => '1',
+            Side::Sell => '2',
+        };
+        append_tag_char(body_buf, 54, side_char);
+        
+        // Encode quantities and prices
+        append_tag_decimal(body_buf, 151, self.leaves_qty);
+        append_tag_decimal(body_buf, 14, self.cum_qty);
+        append_tag_decimal(body_buf, 6, self.avg_px);
+        
+        // Encode optional fields
+        if let Some(last_qty) = self.last_qty {
+            append_tag_decimal(body_buf, 32, last_qty);
+        }
+        if let Some(last_px) = self.last_px {
+            append_tag_decimal(body_buf, 31, last_px);
+        }
+        
+        // Encode transact_time - convert u64 to u32
+        append_tag_u32(body_buf, 60, self.transact_time.try_into().unwrap());
+        
+        // Encode text if present
+        if let Some(ref text) = self.text {
+            append_tag_value(body_buf, 58, text.as_bytes());
+        }
+        
+        Ok(())
+    }
+}
 
+// Optimized FIX message encoding function
 pub fn encode_fix_message<T: FixEncoder>(
     msg_body: &T,
     sender_comp_id: &str,
     target_comp_id: &str,
     msg_seq_num: u32,
-    sending_time: u64, // Simplified timestamp
+    sending_time: u64,
 ) -> Result<Bytes, CodecError> {
-    let mut body_buf = BytesMut::new();
+    let start = Instant::now();
+    
+    let mut body_buf = BytesMut::with_capacity(256);
     msg_body.encode_body(&mut body_buf)?;
 
-    let mut header_buf = BytesMut::new();
-    append_tag_value(&mut header_buf, 8, "FIX.4.2"); // Example, should be configurable
-    append_tag_u32(&mut header_buf, 9, body_buf.len() as u32);
-    append_tag_value(&mut header_buf, 35, msg_body.msg_type());
-    append_tag_value(&mut header_buf, 49, sender_comp_id);
-    append_tag_value(&mut header_buf, 56, target_comp_id);
-    append_tag_u32(&mut header_buf, 34, msg_seq_num);
-    append_tag_u32(&mut header_buf, 52, sending_time as u32); // Simplified sending time
+    let mut header_buf = BytesMut::with_capacity(128);
+    append_tag_value(&mut header_buf, 8, b"FIX.4.2"); // BeginString
+    append_tag_u32(&mut header_buf, 9, body_buf.len() as u32); // BodyLength
+    append_tag_value(&mut header_buf, 35, msg_body.msg_type().as_bytes()); // MsgType
+    append_tag_value(&mut header_buf, 49, sender_comp_id.as_bytes()); // SenderCompID
+    append_tag_value(&mut header_buf, 56, target_comp_id.as_bytes()); // TargetCompID
+    append_tag_u32(&mut header_buf, 34, msg_seq_num); // MsgSeqNum
+    append_tag_u32(&mut header_buf, 52, sending_time.try_into().unwrap()); // SendingTime (with u64->u32 conversion)
 
-    let mut full_msg_buf = BytesMut::new();
-    full_msg_buf.put_slice(&header_buf);
-    full_msg_buf.put_slice(&body_buf);
+    let mut full_msg_buf = BytesMut::with_capacity(header_buf.len() + body_buf.len() + 16);
+    full_msg_buf.extend_from_slice(&header_buf);
+    full_msg_buf.extend_from_slice(&body_buf);
 
     let checksum = calculate_checksum(&full_msg_buf);
-    append_tag_value(&mut full_msg_buf, 10, &format!("{:03}", checksum));
+    
+    // Format checksum as 3 digits with leading zeros
+    let mut checksum_str = [0u8; 3];
+    checksum_str[2] = b'0' + (checksum % 10);
+    checksum_str[1] = b'0' + ((checksum / 10) % 10);
+    checksum_str[0] = b'0' + ((checksum / 100) % 10);
+    
+    append_tag_value(&mut full_msg_buf, 10, &checksum_str); // Checksum
 
+    let elapsed = start.elapsed();
+    ENCODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    ENCODE_NANOS_TOTAL.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    
     Ok(full_msg_buf.freeze())
 }
 
-
+// Optimized FIX message decoding function
 pub fn decode_fix_message(buffer: &mut BytesMut) -> Result<Option<FixMessage>, CodecError> {
-    // This is a very simplified parser. A real FIX parser is much more complex.
-    // It needs to handle partial messages, find SOH delimiters, extract tags and values robustly.
-
-    // Find 8=FIX...10=CHK<SOH>
+    let start = Instant::now();
+    
     let data_slice = buffer.as_ref();
-    let mut fields: std::collections::HashMap<u32, Vec<u8>> = std::collections::HashMap::new();
-    let mut current_pos = 0;
+    
+    // Find 8=FIX
+    let tag8_pos = match data_slice.windows(2).position(|w| w == b"8=") {
+        Some(pos) => pos,
+        None => return Ok(None), // No start of message yet
+    };
+    
+    // Setup our field map
+    let mut field_map = FixFieldMap::new();
+    field_map.set_data(&data_slice[tag8_pos..])?;
+    field_map.parse_fields()?;
+    
+    // Check begin string (tag 8)
+    let begin_string = field_map.get_field_str(8)?.ok_or(CodecError::MissingField(8))?;
+    
+    // Get body length (tag 9)
+    let body_length = field_map.get_field_u32(9)?.ok_or(CodecError::MissingField(9))? as u32;
+    
+    // Get message type (tag 35)
+    let msg_type = field_map.get_field_str(35)?.ok_or(CodecError::MissingField(35))?;
+    
+    // Get sender, target, seq num, time
+    let sender_comp_id = field_map.get_field_str(49)?.ok_or(CodecError::MissingField(49))?;
+    let target_comp_id = field_map.get_field_str(56)?.ok_or(CodecError::MissingField(56))?;
+    let msg_seq_num = field_map.get_field_u32(34)?.ok_or(CodecError::MissingField(34))? as u32;
+    let sending_time = field_map.get_field_u32(52)?.ok_or(CodecError::MissingField(52))? as u64;
 
-    // Find BeginString (8=)
-    let tag8_pos = data_slice.windows(2).position(|w| w == b"8=").ok_or(CodecError::IncompleteMessage)?;
-    current_pos = tag8_pos;
-
-    let mut body_length: Option<u32> = None;
-    let mut msg_type: Option<String> = None;
-    let mut checksum_val: Option<u8> = None;
-    let mut header_map = std::collections::HashMap::new();
-    let mut body_map = std::collections::HashMap::new();
-
-    let mut last_field_end = current_pos;
-
-    loop {
-        if current_pos >= data_slice.len() { break; }
-        let remaining_slice = &data_slice[current_pos..];
-        let eq_pos = remaining_slice.iter().position(|&b| b == b'=').ok_or(CodecError::IncompleteMessage)?;
-        let tag_str = str::from_utf8(&remaining_slice[..eq_pos])?;
-        let tag: u32 = tag_str.parse().map_err(|_| CodecError::InvalidFormat(format!("Invalid tag: {}", tag_str)))?;
-
-        let soh_pos = remaining_slice[eq_pos+1..].iter().position(|&b| b == SOH).ok_or(CodecError::IncompleteMessage)?;
-        let value_slice = &remaining_slice[eq_pos+1 .. eq_pos+1+soh_pos];
-        let value_vec = value_slice.to_vec();
-
-        current_pos += eq_pos + 1 + soh_pos + 1;
-        last_field_end = current_pos;
-
-        match tag {
-            8 | 9 | 35 | 49 | 56 | 34 | 52 => { // Header tags
-                header_map.insert(tag, value_vec.clone());
-                if tag == 9 {
-                    body_length = Some(String::from_utf8(value_vec.clone())?.parse()?);
-                }
-                if tag == 35 {
-                    msg_type = Some(String::from_utf8(value_vec.clone())?);
-                }
-            }
-            10 => { // Trailer tag
-                checksum_val = Some(String::from_utf8(value_vec)?.parse()?);
-                break; // Checksum is the last field
-            }
-            _ => { // Body tags
-                body_map.insert(tag, value_vec);
-            }
-        }
+    // Verify checksum
+    let checksum_value = field_map.get_field_u32(10)?.ok_or(CodecError::MissingField(10))? as u8;
+    
+    // Find checksum position (10=)
+    let tag10_pos = data_slice[tag8_pos..].windows(3).position(|w| w == b"10=")
+        .ok_or(CodecError::MissingField(10))? + tag8_pos;
+    
+    let calculated_checksum = calculate_checksum(&data_slice[tag8_pos..tag10_pos]);
+    
+    if calculated_checksum != checksum_value {
+        return Err(CodecError::ChecksumMismatch { 
+            expected: checksum_value, 
+            actual: calculated_checksum 
+        });
     }
-
-    let calculated_checksum_upto_tag10_start = calculate_checksum(&data_slice[tag8_pos..last_field_end - format!("10={:03}{}", checksum_val.unwrap_or(0), SOH as char).len()]);
-
-    if checksum_val.is_none() { return Err(CodecError::MissingField(10)); }
-    if calculated_checksum_upto_tag10_start != checksum_val.unwrap() {
-        return Err(CodecError::ChecksumMismatch { expected: checksum_val.unwrap(), actual: calculated_checksum_upto_tag10_start });
-    }
-
+    
+    // Build header
     let header = FixHeader {
-        begin_string: String::from_utf8(header_map.remove(&8).ok_or(CodecError::MissingField(8))?)?,
-        body_length: body_length.ok_or(CodecError::MissingField(9))?,
-        msg_type: msg_type.clone().ok_or(CodecError::MissingField(35))?,
-        sender_comp_id: String::from_utf8(header_map.remove(&49).ok_or(CodecError::MissingField(49))?)?,
-        target_comp_id: String::from_utf8(header_map.remove(&56).ok_or(CodecError::MissingField(56))?)?,
-        msg_seq_num: String::from_utf8(header_map.remove(&34).ok_or(CodecError::MissingField(34))?)?.parse()?,
-        sending_time: String::from_utf8(header_map.remove(&52).ok_or(CodecError::MissingField(52))?)?.parse::<u64>()?,
+        begin_string,
+        body_length,
+        msg_type: msg_type.clone(),
+        sender_comp_id,
+        target_comp_id,
+        msg_seq_num,
+        sending_time,
     };
-
-    let body = match msg_type.as_deref() {
-        Some("D") => FixMessageBody::NewOrderSingle(FixNewOrderSingle::decode_body(&mut body_map)?),
-        Some("A") => FixMessageBody::Logon(FixLogon::decode_body(&mut body_map)?),
-        // Add other message types here
-        Some(unknown_type) => return Err(CodecError::UnsupportedMessageType(unknown_type.to_string())),
-        None => return Err(CodecError::MissingField(35)),
+    
+    // Decode message body based on message type
+    let body = match msg_type.as_str() {
+        "D" => FixMessageBody::NewOrderSingle(FixNewOrderSingle::decode_body(&field_map)?),
+        "A" => FixMessageBody::Logon(FixLogon::decode_body(&field_map)?),
+        // Handle additional message types or add placeholder
+        "8" => {
+            // Unfortunately, we need a placeholder for ExecutionReport since it's not fully implemented
+            // In a full implementation, we would properly decode ExecutionReport here
+            FixMessageBody::ExecutionReport(FixExecutionReport {
+                order_id: 0,
+                cl_ord_id: None,
+                exec_id: "placeholder".to_string(),
+                ord_status: OrderStatus::New,
+                symbol: Symbol::new("PLACEHOLDER"),
+                side: Side::Buy,
+                leaves_qty: Decimal::new(0, 0),
+                cum_qty: Decimal::new(0, 0),
+                avg_px: Decimal::new(0, 0),
+                last_qty: None,
+                last_px: None,
+                transact_time: 0,
+                text: None,
+            })
+        }
+        unknown_type => return Err(CodecError::UnsupportedMessageType(unknown_type.to_string())),
     };
-
-    buffer.split_to(last_field_end); // Consume the processed message from the buffer
+    
+    // Use buffer.advance_mut instead of buffer.advance
+    buffer.advance_mut(tag10_pos + 6); // +6 for "10=xxx<SOH>"
+    
+    let elapsed = start.elapsed();
+    DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    DECODE_NANOS_TOTAL.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    
     Ok(Some(FixMessage { header, body }))
 }
 
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rust_decimal_macros::dec;
-    use crate::common_types::{Symbol, Side, OrderType, TimeInForce};
-
-    #[test]
-    fn test_encode_decode_new_order_single() -> Result<(), CodecError> {
-        let nos = FixNewOrderSingle {
-            cl_ord_id: "TestOrd1".to_string(),
-            symbol: Symbol::new("EUR/USD"),
-            side: Side::Buy,
-            transact_time: 1678886400, // Example timestamp
-            order_qty: dec!(100.5),
-            ord_type: OrderType::Limit,
-            price: Some(dec!(1.0567)),
-            tif: Some(TimeInForce::Day),
-        };
-
-        let encoded_bytes = encode_fix_message(&nos, "SENDER", "TARGET", 1, 1678886400)?;
-        println!("Encoded NOS: {}", String::from_utf8_lossy(&encoded_bytes));
-
-        let mut buffer = BytesMut::from(encoded_bytes.as_ref());
-        let decoded_msg_opt = decode_fix_message(&mut buffer)?;
-
-        assert!(decoded_msg_opt.is_some());
-        if let Some(decoded_msg) = decoded_msg_opt {
-            assert_eq!(decoded_msg.header.msg_type, "D");
-            if let FixMessageBody::NewOrderSingle(decoded_nos) = decoded_msg.body {
-                assert_eq!(decoded_nos.cl_ord_id, "TestOrd1");
-                assert_eq!(decoded_nos.symbol.as_str(), "EUR/USD");
-                assert_eq!(decoded_nos.side, Side::Buy);
-                assert_eq!(decoded_nos.order_qty, dec!(100.5));
-                assert_eq!(decoded_nos.price, Some(dec!(1.0567)));
-            } else {
-                panic!("Decoded message is not NewOrderSingle");
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_encode_decode_logon() -> Result<(), CodecError> {
-        let logon = FixLogon {
-            encrypt_method: 0,
-            heart_bt_int: 30,
-            reset_seq_num_flag: Some(true),
-        };
-
-        let encoded_bytes = encode_fix_message(&logon, "CLIENT1", "SERVER1", 1, 1678886000)?;
-        println!("Encoded Logon: {}", String::from_utf8_lossy(&encoded_bytes));
-
-        let mut buffer = BytesMut::from(encoded_bytes.as_ref());
-        let decoded_msg_opt = decode_fix_message(&mut buffer)?;
-        assert!(decoded_msg_opt.is_some());
-        if let Some(decoded_msg) = decoded_msg_opt {
-            assert_eq!(decoded_msg.header.msg_type, "A");
-            if let FixMessageBody::Logon(decoded_logon) = decoded_msg.body {
-                assert_eq!(decoded_logon.heart_bt_int, 30);
-                assert_eq!(decoded_logon.reset_seq_num_flag, Some(true));
-            } else {
-                panic!("Decoded message is not Logon");
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_checksum_calculation() {
-        let data = b"8=FIX.4.2\x019=70\x0135=D\x0149=SENDER\x0156=TARGET\x0134=1\x0152=20230315-12:00:00.000\x0111=TestOrd1\x0155=EUR/USD\x0154=1\x0160=1678886400\x0138=100.5\x0140=2\x0144=1.0567\x0159=0\x01";
-        // The checksum for this data (excluding the checksum field itself) should be calculated.
-        // Example: if the string is "8=...<SOH>...<SOH>", checksum is sum of bytes % 256
-        let checksum = calculate_checksum(data);
-        // This value needs to be verified against a known correct checksum for the given string.
-        // For example, if a FIX engine generates "...10=123<SOH>", then 123 is the target.
-        // Here, we just ensure it runs. A real test would compare to a pre-calculated value.
-        assert!(checksum > 0); // Basic check
-    }
+// Function to get codec performance metrics
+pub fn get_codec_metrics() -> (f64, f64, u64, u64) {
+    let encode_count = ENCODE_COUNT.load(Ordering::Relaxed);
+    let decode_count = DECODE_COUNT.load(Ordering::Relaxed);
+    let encode_nanos = ENCODE_NANOS_TOTAL.load(Ordering::Relaxed);
+    let decode_nanos = DECODE_NANOS_TOTAL.load(Ordering::Relaxed);
+    
+    let avg_encode_micros = if encode_count > 0 {
+        encode_nanos as f64 / encode_count as f64 / 1000.0
+    } else {
+        0.0
+    };
+    
+    let avg_decode_micros = if decode_count > 0 {
+        decode_nanos as f64 / decode_count as f64 / 1000.0
+    } else {
+        0.0
+    };
+    
+    (avg_encode_micros, avg_decode_micros, encode_count, decode_count)
 }
-

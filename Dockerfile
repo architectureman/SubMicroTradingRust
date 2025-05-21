@@ -19,9 +19,18 @@ RUN mkdir -p SubMicroTradingRust_workspace/smt_core/src && \
     mkdir -p SubMicroTradingRust_workspace/smt_io_adapters/src && \
     mkdir -p SubMicroTradingRust_workspace/smt_oms_simulation/src && \
     mkdir -p SubMicroTradingRust_workspace/tests && \
+    # Create a valid workspace Cargo.toml
+    echo '[workspace]\nmembers = ["smt_core", "smt_io_adapters", "smt_oms_simulation"]' > SubMicroTradingRust_workspace/Cargo.toml && \
+    # Create a valid smt_core Cargo.toml
+    echo '[package]\nname = "smt_core"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nbytes = "1"\nrust_decimal = { version = "1.33", features = ["macros"] }\nrust_decimal_macros = "1.33"\nthiserror = "1.0"' > SubMicroTradingRust_workspace/smt_core/Cargo.toml && \
+    # Create a valid smt_io_adapters Cargo.toml
+    echo '[package]\nname = "smt_io_adapters"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\ntokio = { version = "1", features = ["full"] }\ntracing = "0.1"\ntracing-subscriber = { version = "0.3", features = ["env-filter"] }\nbytes = "1"\nthiserror = "1.0"\nlibc = "0.2"\ncore_affinity = "0.8"' > SubMicroTradingRust_workspace/smt_io_adapters/Cargo.toml && \
+    # Create a valid smt_oms_simulation Cargo.toml
+    echo '[package]\nname = "smt_oms_simulation"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nsmt_core = { path = "../smt_core" }\nsmt_io_adapters = { path = "../smt_io_adapters" }\ntokio = { version = "1", features = ["full"] }\ntracing = "0.1"\nrust_decimal = "1"\nrust_decimal_macros = "1"\nclap = { version = "4", features = ["derive"] }\nbytes = "1"\ncore_affinity = "0.8"' > SubMicroTradingRust_workspace/smt_oms_simulation/Cargo.toml && \
+    # Create dummy source files
     echo "// Dummy lib.rs for smt_core" > SubMicroTradingRust_workspace/smt_core/src/lib.rs && \
     echo "// Dummy lib.rs for smt_io_adapters" > SubMicroTradingRust_workspace/smt_io_adapters/src/lib.rs && \
-    echo "fn main() {println!(\"Dummy main for smt_oms_simulation\");}" > SubMicroTradingRust_workspace/smt_oms_simulation/src/main.rs && \
+    echo 'fn main() {println!("Dummy main for smt_oms_simulation");}' > SubMicroTradingRust_workspace/smt_oms_simulation/src/main.rs && \
     cd SubMicroTradingRust_workspace && cargo build --release --workspace && rm -rf target
 
 # Sao chép toàn bộ mã nguồn của workspace
