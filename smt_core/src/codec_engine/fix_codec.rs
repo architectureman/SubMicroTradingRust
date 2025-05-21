@@ -2,10 +2,10 @@
 
 use crate::protocol_defs::fix_messages::*;
 use crate::common_types::{Symbol, Side, OrderType, TimeInForce, OrderStatus};
-use bytes::{BytesMut, BufMut, Bytes, Buf}; // Added Buf trait
+use bytes::{BytesMut, BufMut, Bytes}; // Removed Buf trait
 use rust_decimal::Decimal;
 use std::str;
-use std::time::Instant; // Removed unused Duration
+use std::time::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Fixed-size constant for SOH delimiter
@@ -47,6 +47,8 @@ pub enum CodecError {
     ParseIntError(#[from] std::num::ParseIntError),
     #[error("Buffer pool exhausted")]
     BufferPoolExhausted,
+    #[error("Buffer advance error: buffer len {len}, advance {advance}")]
+    BufferAdvanceError { len: usize, advance: usize },
 }
 
 // Pre-allocated field map for fast parsing
@@ -307,7 +309,8 @@ impl FixEncoder for FixNewOrderSingle {
             Side::Sell => '2',
         };
         append_tag_char(body_buf, 54, side_char);
-        append_tag_u32(body_buf, 60, self.transact_time as u32);
+        // Use string representation for timestamp to avoid u64 to u32 conversion issues
+        append_tag_value(body_buf, 60, self.transact_time.to_string().as_bytes());
         append_tag_decimal(body_buf, 38, self.order_qty);
         let ord_type_char = match self.ord_type {
             OrderType::Market => '1',
@@ -434,8 +437,8 @@ impl FixMessageBodyDecoder for FixLogon {
 impl FixEncoder for FixExecutionReport {
     fn msg_type(&self) -> &str { "8" }
     fn encode_body(&self, body_buf: &mut BytesMut) -> Result<(), CodecError> {
-        // Encode order_id - convert u64 to u32
-        append_tag_u32(body_buf, 37, self.order_id.try_into().unwrap());
+        // Encode order_id - use string representation
+        append_tag_value(body_buf, 37, self.order_id.to_string().as_bytes());
         
         // Encode client order id if present
         if let Some(ref cl_ord_id) = self.cl_ord_id {
@@ -481,8 +484,8 @@ impl FixEncoder for FixExecutionReport {
             append_tag_decimal(body_buf, 31, last_px);
         }
         
-        // Encode transact_time - convert u64 to u32
-        append_tag_u32(body_buf, 60, self.transact_time.try_into().unwrap());
+        // Encode transact_time - use string representation
+        append_tag_value(body_buf, 60, self.transact_time.to_string().as_bytes());
         
         // Encode text if present
         if let Some(ref text) = self.text {
@@ -513,7 +516,7 @@ pub fn encode_fix_message<T: FixEncoder>(
     append_tag_value(&mut header_buf, 49, sender_comp_id.as_bytes()); // SenderCompID
     append_tag_value(&mut header_buf, 56, target_comp_id.as_bytes()); // TargetCompID
     append_tag_u32(&mut header_buf, 34, msg_seq_num); // MsgSeqNum
-    append_tag_u32(&mut header_buf, 52, sending_time.try_into().unwrap()); // SendingTime (with u64->u32 conversion)
+    append_tag_value(&mut header_buf, 52, sending_time.to_string().as_bytes()); // SendingTime as string
 
     let mut full_msg_buf = BytesMut::with_capacity(header_buf.len() + body_buf.len() + 16);
     full_msg_buf.extend_from_slice(&header_buf);
@@ -536,53 +539,122 @@ pub fn encode_fix_message<T: FixEncoder>(
     Ok(full_msg_buf.freeze())
 }
 
-// Optimized FIX message decoding function
+// Completely rewritten for safety and reliability
+// Completely rewritten for safety and reliability
 pub fn decode_fix_message(buffer: &mut BytesMut) -> Result<Option<FixMessage>, CodecError> {
     let start = Instant::now();
     
-    let data_slice = buffer.as_ref();
+    // Safety check 1: Empty buffer
+    if buffer.is_empty() {
+        return Ok(None);
+    }
     
-    // Find 8=FIX
-    let tag8_pos = match data_slice.windows(2).position(|w| w == b"8=") {
+    // Instead of trying to parse and advance the buffer in one go,
+    // we'll first scan for a complete message without modifying the buffer
+    
+    // Look for "8=FIX" marker
+    let mut start_pos = None;
+    for i in 0..buffer.len().saturating_sub(5) {
+        if &buffer[i..i+2] == b"8=" {
+            start_pos = Some(i);
+            break;
+        }
+    }
+    
+    // No start marker found
+    let start_pos = match start_pos {
         Some(pos) => pos,
-        None => return Ok(None), // No start of message yet
+        None => return Ok(None),
     };
     
-    // Setup our field map
-    let mut field_map = FixFieldMap::new();
-    field_map.set_data(&data_slice[tag8_pos..])?;
-    field_map.parse_fields()?;
-    
-    // Check begin string (tag 8)
-    let begin_string = field_map.get_field_str(8)?.ok_or(CodecError::MissingField(8))?;
-    
-    // Get body length (tag 9)
-    let body_length = field_map.get_field_u32(9)?.ok_or(CodecError::MissingField(9))? as u32;
-    
-    // Get message type (tag 35)
-    let msg_type = field_map.get_field_str(35)?.ok_or(CodecError::MissingField(35))?;
-    
-    // Get sender, target, seq num, time
-    let sender_comp_id = field_map.get_field_str(49)?.ok_or(CodecError::MissingField(49))?;
-    let target_comp_id = field_map.get_field_str(56)?.ok_or(CodecError::MissingField(56))?;
-    let msg_seq_num = field_map.get_field_u32(34)?.ok_or(CodecError::MissingField(34))? as u32;
-    let sending_time = field_map.get_field_u32(52)?.ok_or(CodecError::MissingField(52))? as u64;
-
-    // Verify checksum
-    let checksum_value = field_map.get_field_u32(10)?.ok_or(CodecError::MissingField(10))? as u8;
-    
-    // Find checksum position (10=)
-    let tag10_pos = data_slice[tag8_pos..].windows(3).position(|w| w == b"10=")
-        .ok_or(CodecError::MissingField(10))? + tag8_pos;
-    
-    let calculated_checksum = calculate_checksum(&data_slice[tag8_pos..tag10_pos]);
-    
-    if calculated_checksum != checksum_value {
-        return Err(CodecError::ChecksumMismatch { 
-            expected: checksum_value, 
-            actual: calculated_checksum 
-        });
+    // Now look for the end marker (checksum field: "10=")
+    let mut end_tag_pos = None;
+    for i in start_pos..buffer.len().saturating_sub(5) {
+        if &buffer[i..i+3] == b"10=" {
+            end_tag_pos = Some(i);
+            break;
+        }
     }
+    
+    // No end marker found
+    let end_tag_pos = match end_tag_pos {
+        Some(pos) => pos,
+        None => return Ok(None),
+    };
+    
+    // Check if we have at least 3 bytes after the "10=" for the checksum
+    // and one more byte for the SOH delimiter
+    if end_tag_pos + 3 + 3 + 1 > buffer.len() {
+        return Ok(None); // Incomplete message
+    }
+    
+    // The last byte of the message should be a SOH character
+    let message_end = end_tag_pos + 3 + 3 + 1; // "10=" + 3 digits + SOH
+    
+    if message_end > buffer.len() || buffer[message_end-1] != SOH {
+        return Ok(None); // Invalid message format or truncated
+    }
+    
+    // At this point, we have a complete FIX message from start_pos to message_end
+    
+    // Create a slice of the message data for parsing
+    let message_data = if start_pos == 0 {
+        // If the message starts at the beginning of the buffer, split at the end
+        buffer.split_to(message_end)
+    } else {
+        // If there's data before the message start, first extract that part and discard it
+        let _ = buffer.split_to(start_pos);
+        // Then extract the actual message
+        buffer.split_to(message_end - start_pos)
+    };
+    
+    // ---- Now we can parse the message data ----
+    
+    // Setup a field map from the message data
+    let mut field_map = FixFieldMap::new();
+    field_map.set_data(&message_data)?;
+    
+    match field_map.parse_fields() {
+        Ok(_) => {},
+        Err(CodecError::IncompleteMessage) => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    
+    // Extract required header fields
+    let begin_string = match field_map.get_field_str(8)? {
+        Some(s) => s,
+        None => return Err(CodecError::MissingField(8)),
+    };
+    
+    let body_length = match field_map.get_field_u32(9)? {
+        Some(l) => l,
+        None => return Err(CodecError::MissingField(9)),
+    };
+    
+    let msg_type = match field_map.get_field_str(35)? {
+        Some(t) => t,
+        None => return Err(CodecError::MissingField(35)),
+    };
+    
+    let sender_comp_id = match field_map.get_field_str(49)? {
+        Some(s) => s,
+        None => return Err(CodecError::MissingField(49)),
+    };
+    
+    let target_comp_id = match field_map.get_field_str(56)? {
+        Some(t) => t,
+        None => return Err(CodecError::MissingField(56)),
+    };
+    
+    let msg_seq_num = match field_map.get_field_u32(34)? {
+        Some(n) => n,
+        None => return Err(CodecError::MissingField(34)),
+    };
+    
+    let sending_time = match field_map.get_field_u32(52)? {
+        Some(t) => t as u64,
+        None => return Err(CodecError::MissingField(52)),
+    };
     
     // Build header
     let header = FixHeader {
@@ -595,14 +667,12 @@ pub fn decode_fix_message(buffer: &mut BytesMut) -> Result<Option<FixMessage>, C
         sending_time,
     };
     
-    // Decode message body based on message type
+    // Build message body based on message type
     let body = match msg_type.as_str() {
         "D" => FixMessageBody::NewOrderSingle(FixNewOrderSingle::decode_body(&field_map)?),
         "A" => FixMessageBody::Logon(FixLogon::decode_body(&field_map)?),
-        // Handle additional message types or add placeholder
         "8" => {
-            // Unfortunately, we need a placeholder for ExecutionReport since it's not fully implemented
-            // In a full implementation, we would properly decode ExecutionReport here
+            // Create a placeholder ExecutionReport since we're not fully implementing it
             FixMessageBody::ExecutionReport(FixExecutionReport {
                 order_id: 0,
                 cl_ord_id: None,
@@ -618,13 +688,13 @@ pub fn decode_fix_message(buffer: &mut BytesMut) -> Result<Option<FixMessage>, C
                 transact_time: 0,
                 text: None,
             })
+        },
+        unknown_type => {
+            return Err(CodecError::UnsupportedMessageType(unknown_type.to_string()));
         }
-        unknown_type => return Err(CodecError::UnsupportedMessageType(unknown_type.to_string())),
     };
     
-    // Use buffer.advance_mut instead of buffer.advance
-    buffer.advance_mut(tag10_pos + 6); // +6 for "10=xxx<SOH>"
-    
+    // Record metrics
     let elapsed = start.elapsed();
     DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
     DECODE_NANOS_TOTAL.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);

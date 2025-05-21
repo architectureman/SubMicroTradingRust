@@ -2,10 +2,10 @@ use clap::Parser;
 use smt_core::common_types::{OrderType, Side, Symbol, TimeInForce, OrderStatus};
 use smt_core::protocol_defs::fix_messages::{FixMessageBody, FixNewOrderSingle, FixLogon, FixExecutionReport};
 use smt_core::codec_engine::fix_codec::{encode_fix_message, decode_fix_message, get_codec_metrics};
-use smt_io_adapters::network_tcp::{TcpConnectionManager, read_message, write_message, NetworkError, get_network_metrics};
+use smt_io_adapters::network_tcp::{TcpConnectionManager, read_message, write_message, get_network_metrics};
 use smt_io_adapters::file_logger;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt}; // Thêm AsyncWriteExt
 use bytes::BytesMut;
 use rust_decimal_macros::dec;
 use tracing::{info, error, warn, debug};
@@ -16,7 +16,6 @@ use std::time::{Instant, Duration};
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, Semaphore};
 use std::thread;
-use std::collections::VecDeque;
 use core_affinity::{get_core_ids, set_for_current};
 
 // Performance metrics
@@ -134,8 +133,8 @@ async fn run_server(listen_addr: String, worker_threads: usize, pin_cores: bool)
             let min_latency = MIN_LATENCY_MICROS.load(Ordering::Relaxed);
             let max_latency = MAX_LATENCY_MICROS.load(Ordering::Relaxed);
             
-            let (avg_encode_micros, avg_decode_micros, encode_count, decode_count) = get_codec_metrics();
-            let (avg_read_micros, avg_write_micros, read_count, write_count) = get_network_metrics();
+            let (avg_encode_micros, avg_decode_micros, _encode_count, _decode_count) = get_codec_metrics();
+            let (avg_read_micros, avg_write_micros, _read_count, _write_count) = get_network_metrics();
             
             info!(
                 "Performance: {:.2} orders/sec, Latency avg: {:.2}µs min: {}µs max: {}µs, Codec encode: {:.2}µs decode: {:.2}µs, Network read: {:.2}µs write: {:.2}µs",
@@ -182,11 +181,13 @@ async fn run_server(listen_addr: String, worker_threads: usize, pin_cores: bool)
                     let _permit = permit;
                     
                     // Create channels for network<->processing communication
-                    let (net_tx, proc_rx) = mpsc::channel::<NetworkMessage>(1000);
+                    let (net_tx, mut proc_rx) = mpsc::channel::<NetworkMessage>(1000); // Thêm mut ở đây
                     let (proc_tx, mut net_rx) = mpsc::channel::<ProcessingMessage>(1000);
                     
+                    // Sử dụng into_split để tách socket thành hai phần
+                    let (mut reader_socket, mut writer_socket) = socket.into_split();
+                    
                     // Spawn network reader thread
-                    let mut reader_socket = socket;
                     let reader_net_tx = net_tx.clone();
                     
                     let reader_handle = tokio::spawn(async move {
@@ -222,8 +223,6 @@ async fn run_server(listen_addr: String, worker_threads: usize, pin_cores: bool)
                     });
                     
                     // Spawn network writer thread
-                    let mut writer_socket = socket;
-                    
                     let writer_handle = tokio::spawn(async move {
                         while let Some(msg) = net_rx.recv().await {
                             match msg {
@@ -329,7 +328,7 @@ async fn run_server(listen_addr: String, worker_threads: usize, pin_cores: bool)
                                                     
                                                     debug!("Order processed in {}µs", latency_micros);
                                                 }
-                                                FixMessageBody::Logon(logon_msg) => {
+                                                FixMessageBody::Logon(_logon_msg) => { // Thêm dấu gạch dưới
                                                     // Create logon response
                                                     let logon_response = FixLogon {
                                                         encrypt_method: 0,
@@ -737,14 +736,14 @@ async fn run_benchmark(
     info!("Min: {}", min_latency);
     info!("Max: {}", max_latency);
     
-    let (avg_encode_micros, avg_decode_micros, encode_count, decode_count) = get_codec_metrics();
-    let (avg_read_micros, avg_write_micros, read_count, write_count) = get_network_metrics();
+    let (avg_encode_micros, avg_decode_micros, _encode_count, _decode_count) = get_codec_metrics();
+    let (avg_read_micros, avg_write_micros, _read_count, _write_count) = get_network_metrics();
     
     info!("\n--- Component Performance ---");
     info!("Codec: encode={:.2}µs ({} calls), decode={:.2}µs ({} calls)", 
-        avg_encode_micros, encode_count, avg_decode_micros, decode_count);
+        avg_encode_micros, _encode_count, avg_decode_micros, _decode_count);
     info!("Network: read={:.2}µs ({} calls), write={:.2}µs ({} calls)",
-        avg_read_micros, read_count, avg_write_micros, write_count);
+        avg_read_micros, _read_count, avg_write_micros, _write_count);
     
     Ok(())
 }

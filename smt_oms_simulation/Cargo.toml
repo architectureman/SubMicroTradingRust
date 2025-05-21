@@ -1,3 +1,8 @@
+[package]
+name = "smt_oms_simulation"
+version = "0.1.0"
+edition = "2021"
+
 [dependencies]
 smt_core = { path = "../smt_core" }
 smt_io_adapters = { path = "../smt_io_adapters" }
@@ -7,4 +12,5 @@ rust_decimal = "1"
 rust_decimal_macros = "1"
 clap = { version = "4", features = ["derive"] }
 bytes = "1"
-core_affinity = "0.8"  # Corrected name with underscore
+core_affinity = "0.8"
+chrono = "0.4"   # Thêm dependency này

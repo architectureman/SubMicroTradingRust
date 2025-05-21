@@ -1,7 +1,6 @@
 #![allow(dead_code)] // Allow dead code for now
 
 use crate::common_types::{Price, Quantity, Symbol, OrderID, Timestamp, Side, OrderType, TimeInForce};
-use rust_decimal::Decimal;
 
 // --- FIX Message Header --- (Simplified for now)
 #[derive(Debug, Clone, PartialEq)]

@@ -1,7 +1,7 @@
 #![allow(dead_code)] // Allow dead code for now as types are being defined
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+// Removed the unused import from here
 
 // Basic numeric types
 pub type Price = Decimal;
@@ -111,6 +111,7 @@ impl Order {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal_macros::dec; // Moved the import here where it's used
 
     #[test]
     fn symbol_creation_and_conversion() {
@@ -139,4 +140,3 @@ mod tests {
         assert_eq!(order.price, Some(dec!(150.25)));
     }
 }
-

@@ -3,7 +3,7 @@
 use tracing::{error, info, warn, debug, trace, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use std::io::Error;
+// Removed the unused import: std::io::Error
 
 /// Initializes the logging system.
 ///
@@ -101,4 +101,3 @@ mod tests {
         assert!(true); // Placeholder, actual test of init_logger is tricky with global state
     }
 }
-

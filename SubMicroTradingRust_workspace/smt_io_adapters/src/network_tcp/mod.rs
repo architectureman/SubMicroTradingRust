@@ -3,8 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use bytes::{BytesMut, Bytes};
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, Duration};
-use std::net::SocketAddr;
+use std::time::Instant;
 use tracing::{error, info, debug};
 
 // Performance metrics
@@ -128,9 +127,9 @@ fn configure_socket_for_hft(socket: &TcpStream) -> io::Result<()> {
     // Disable Nagle's algorithm for lower latency
     socket.set_nodelay(true)?;
     
-    // Set socket buffer sizes (large enough to handle bursts)
-    socket.set_send_buffer_size(4 * 1024 * 1024)?; // 4MB
-    socket.set_recv_buffer_size(4 * 1024 * 1024)?; // 4MB
+    // Note: We're not setting buffer sizes as Tokio's TcpStream doesn't provide
+    // direct methods for this. If these settings are critical, consider using
+    // the socket2 crate for more advanced socket configuration.
     
     // Platform-specific optimizations
     #[cfg(target_os = "linux")]
@@ -272,7 +271,12 @@ pub struct ConnectionPool {
 
 impl ConnectionPool {
     pub fn new(capacity: usize, address: String) -> Self {
-        let connections = vec![None; capacity];
+        // Initialize with capacity empty slots
+        let mut connections = Vec::with_capacity(capacity);
+        for _ in 0..capacity {
+            connections.push(None);
+        }
+        
         ConnectionPool { connections, address }
     }
     
